@@ -87,7 +87,7 @@ def _get_session_from_driver(driver, base_url):
     return session
 
 
-def _get_mail_list_js(driver, base_url, keyword="", max_count=50):
+def _get_mail_list_js(driver, base_url, keyword="", max_count=200):
     folder_id = FOLDER_ID
     xml_body = (
         "<DATA>"
@@ -362,7 +362,7 @@ def run_full_pipeline():
         driver = _make_driver(headless=True)
         _selenium_login(driver, base_url)
         keyword = get_setting("mail_keyword") or "세금계산서"
-        mails = _get_mail_list_js(driver, base_url, keyword=keyword)
+        mails = _get_mail_list_js(driver, base_url, keyword=keyword, max_count=200)
         if not mails:
             result["error_msg"] = "세금계산서 메일 없음 (키워드: " + keyword + ")"
             return result
