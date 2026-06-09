@@ -1,3 +1,10 @@
+import subprocess, os as _os
+_base = _os.path.dirname(_os.path.abspath(__file__))
+try:
+    subprocess.run(["C:/Program Files/Git/bin/git.exe", "-C", _base, "pull", "--rebase"],
+                   capture_output=True, timeout=30)
+except Exception:
+    pass
 import streamlit as st
 from database import init_db
 
