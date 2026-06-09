@@ -7,7 +7,7 @@ st.set_page_config(page_title="대시보드", page_icon="📊", layout="wide")
 st.title("📊 대시보드")
 st.markdown("---")
 
-col_btn1, col_btn2, col_spacer = st.columns([1, 1, 4])
+col_btn1, col_btn2, col_btn3, col_spacer = st.columns([1, 1, 1, 3])
 with col_btn1:
     if st.button("🔄 지금 메일 수집 실행", type="primary", use_container_width=True):
         with st.spinner("메일을 수집하고 처리 중입니다..."):
@@ -23,6 +23,33 @@ with col_btn1:
 with col_btn2:
     if st.button("🔃 새로고침", use_container_width=True):
         st.rerun()
+with col_btn3:
+    if st.button("🛠️ 코드갱신+재실행", use_container_width=True):
+        import subprocess, sqlite3, os
+        with st.spinner("git pull 중..."):
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            r = subprocess.run(
+                ["C:/Program Files/Git/bin/git.exe", "-C", base, "pull", "--rebase"],
+                capture_output=True, text=True)
+            st.code(r.stdout + r.stderr)
+        with st.spinner("DB 초기화 중..."):
+            db_path = os.path.join(base, "portal.db")
+            con = sqlite3.connect(db_path)
+            con.execute("DELETE FROM tax_invoices WHERE supplier_biz_no='0000000000' OR total_amount=0")
+            con.commit(); con.close()
+            st.success("DB 초기화 완료")
+        with st.spinner("파이프라인 재실행 중..."):
+            import importlib, sys
+            if 'modules.mail_collector' in sys.modules:
+                importlib.reload(sys.modules['modules.mail_collector'])
+            from modules.mail_collector import run_full_pipeline as rfp
+            try:
+                res2 = rfp()
+                st.success(f"✅ 재실행 완료: 신규 {res2['new']}건, 결의서 {res2['submitted']}건, 오류 {res2['error']}건")
+                if res2.get('error_msg'):
+                    st.warning(res2['error_msg'])
+            except Exception as ex:
+                st.error(str(ex))
 
 st.markdown("---")
 
