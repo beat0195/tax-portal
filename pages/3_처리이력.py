@@ -43,9 +43,9 @@ if invoices:
         "ERROR": "❌ 오류"
     }
     df["상태"] = df["status"].map(status_label)
-    df["공급가액"] = df["supply_amount"].apply(lambda x: f"{int(x):,}" if x else "-")
-    df["세액"]    = df["tax_amount"].apply(lambda x: f"{int(x):,}" if x else "-")
-    df["합계금액"] = df["total_amount"].apply(lambda x: f"{int(x):,}" if x else "-")
+    df["공급가액"] = df["supply_amount"].apply(lambda x: f"{int(x):,}" if (x and x == x and x != 0) else "-")
+    df["세액"]    = df["tax_amount"].apply(lambda x: f"{int(x):,}" if (x and x == x and x != 0) else "-")
+    df["합계금액"] = df["total_amount"].apply(lambda x: f"{int(x):,}" if (x and x == x and x != 0) else "-")
 
     display = df[[
         "id", "issue_date", "supplier_name", "supplier_biz_no",
