@@ -138,29 +138,39 @@ def _extract_taxbill_link(driver, mail_url):
     try:
         driver.get(mail_url)
         time.sleep(3)
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        link = _find_taxbill_link_in_soup(soup)
-        if link:
-            return link
-        for iframe in soup.find_all("iframe"):
-            src = iframe.get("src", "")
-            if not src:
-                continue
-            if not src.startswith("http"):
-                src = "https://ngwx.ktbizoffice.com" + src
+        # 방법1: JS로 모든 frame 포함 전체 href 추출
+        all_hrefs = driver.execute_script(
+            "var hrefs=[];"
+            "function getLinks(doc){"
+            "  var tags=doc.querySelectorAll('a[href]');"
+            "  for(var i=0;i<tags.length;i++){hrefs.push(tags[i].href);}"
+            "}"
+            "try{getLinks(document);}catch(e){}"
+            "for(var i=0;i<window.frames.length;i++){"
+            "  try{getLinks(window.frames[i].document);}catch(e){}"
+            "}"
+            "return hrefs;"
+        ) or []
+        for href in all_hrefs:
+            if href and ("taxbill" in href.lower() or "etax" in href.lower() or "hot_gate" in href.lower()):
+                return href
+        # 방법2: Selenium frame switch
+        frames = driver.find_elements(By.TAG_NAME, "frame") + driver.find_elements(By.TAG_NAME, "iframe")
+        for frm in frames:
             try:
-                driver.get(src)
-                time.sleep(2)
+                driver.switch_to.frame(frm)
                 soup2 = BeautifulSoup(driver.page_source, "html.parser")
                 link = _find_taxbill_link_in_soup(soup2)
+                driver.switch_to.default_content()
                 if link:
                     return link
             except Exception:
-                continue
-        return None
+                driver.switch_to.default_content()
+        # 방법3: page_source 직접 파싱
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        return _find_taxbill_link_in_soup(soup)
     except Exception:
         return None
-
 
 def _find_taxbill_link_in_soup(soup):
     keywords = ["사용자확인", "바로가기", "세금계산서확인", "확인하기"]
