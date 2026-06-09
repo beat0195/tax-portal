@@ -124,3 +124,38 @@ with tab3:
 
     st.info("⚠️ 자동 실행 기능은 서버 상시 가동 환경에서만 동작합니다. "
             "로컬 PC에서는 포탈이 켜져 있는 동안만 스케줄이 활성화됩니다.")
+
+st.markdown("---")
+st.subheader("🛠️ 코드 업데이트")
+col_a, col_b = st.columns(2)
+with col_a:
+    if st.button("📥 git pull (코드 업데이트)", use_container_width=True):
+        import subprocess, os
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        r = subprocess.run(
+            ["C:/Program Files/Git/bin/git.exe", "-C", base, "pull", "--rebase"],
+            capture_output=True, text=True)
+        st.code(r.stdout + r.stderr)
+        if r.returncode == 0:
+            st.success("✅ git pull 완료! 아래 'DB 초기화+재실행' 버튼을 누르세요.")
+        else:
+            st.error("git pull 실패")
+with col_b:
+    if st.button("🗑️ 금액=0 기록 삭제 + 파이프라인 재실행", use_container_width=True):
+        import sqlite3, os, importlib, sys
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_path = os.path.join(base, "portal.db")
+        con = sqlite3.connect(db_path)
+        deleted = con.execute("DELETE FROM tax_invoices WHERE total_amount=0 OR supplier_biz_no='0000000000'").rowcount
+        con.commit(); con.close()
+        st.info(f"DB 정리: {deleted}건 삭제")
+        if 'modules.mail_collector' in sys.modules:
+            importlib.reload(sys.modules['modules.mail_collector'])
+        from modules.mail_collector import run_full_pipeline as rfp
+        try:
+            res = rfp()
+            st.success(f"✅ 완료: 신규 {res['new']}건, 결의서 {res['submitted']}건, 오류 {res['error']}건")
+            if res.get('error_msg'):
+                st.warning(res['error_msg'])
+        except Exception as ex:
+            st.error(str(ex))
