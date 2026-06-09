@@ -57,6 +57,10 @@ with tab2:
         mail_keyword = st.text_input("메일 검색 키워드",
             value=settings.get("mail_keyword", "세금계산서"),
             help="이 키워드가 포함된 메일만 처리합니다.")
+        buyer_biz_no = st.text_input("🏢 구매자 사업자번호 (본인 회사)",
+            value=settings.get("buyer_biz_no", ""),
+            placeholder="예: 1234567890 (숫자만 10자리)",
+            help="세금계산서 조회 시 입력하는 본인 회사 사업자번호")
         auto_submit = st.checkbox("결의서 자동 상신 (체크 해제 시 초안만 생성)",
             value=settings.get("auto_submit", "false") == "true")
 
@@ -67,6 +71,7 @@ with tab2:
         if st.form_submit_button("💾 저장", use_container_width=True):
             set_setting("openai_api_key", openai_key)
             set_setting("mail_keyword", mail_keyword)
+            set_setting("buyer_biz_no", buyer_biz_no.replace("-", ""))
             set_setting("auto_submit", "true" if auto_submit else "false")
             st.success("AI 설정 저장 완료!")
 
