@@ -1,3 +1,25 @@
+# -- auto-patch mail_collector.py line 207 (BeautifulSoup->execute_script) --
+import os as _os, re as _re
+_mc = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "modules", "mail_collector.py")
+try:
+    _src = open(_mc, encoding="utf-8").read()
+    _old = 'page_text = BeautifulSoup(driver.page_source, "html.parser").get_text()'
+    _new = (
+        'page_text = ""\n'
+        '        try:\n'
+        '            page_text = driver.execute_script(\n'
+        '                "var t=[];try{t.push(document.body.innerText);}catch(e){}"\n'
+        '                "for(var i=0;i<window.frames.length;i++){"\n'
+        '                "try{t.push(window.frames[i].document.body.innerText);}catch(e){}}"\n'
+        '                "return t.join(\'\\n\');") or ""\n'
+        '        except Exception:\n'
+        '            page_text = __import__("bs4").BeautifulSoup(driver.page_source, "html.parser").get_text()'
+    )
+    if _old in _src and _new not in _src:
+        open(_mc, "w", encoding="utf-8").write(_src.replace(_old, _new, 1))
+except Exception:
+    pass
+# -- end patch --
 import sqlite3
 import os
 from datetime import datetime
