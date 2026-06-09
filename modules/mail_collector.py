@@ -190,59 +190,84 @@ def _parse_taxbill_page(driver, taxbill_url):
     }
     try:
         driver.get(taxbill_url)
-        time.sleep(3)
-        buyer_biz = get_setting("buyer_biz_no") or ""
-        biz_inputs = driver.find_elements(By.CSS_SELECTOR,
-            "input[name*='biz'], input[id*='biz'], "
-            "input[placeholder*='사업자'], input[placeholder*='조회']")
-        if biz_inputs and buyer_biz:
-            biz_inputs[0].clear()
-            biz_inputs[0].send_keys(buyer_biz.replace("-", ""))
-            btns = driver.find_elements(By.CSS_SELECTOR,
-                "button[type='submit'], input[type='submit'], "
-                "a[onclick*='search'], button[onclick*='view']")
-            if btns:
-                btns[0].click()
-                time.sleep(2)
-        page_text = BeautifulSoup(driver.page_source, "html.parser").get_text()
-        m = re.search(r'\d{3}-\d{2}-\d{5}', page_text)
-        if m:
-            result["supplier_biz_no"] = m.group().replace("-", "")
+        time.sleep(4)
+        # -- 1) 스크린샷 저장 (페이지 로드 직후)
+        dl_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
+        os.makedirs(dl_dir, exist_ok=True)
+        import datetime
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        screenshot_path = os.path.join(dl_dir, f"taxbill_{ts}.png")
+        try:
+            driver.save_screenshot(screenshot_path)
+            result["pdf_path"] = screenshot_path
+        except Exception:
+            pass
+        # -- 2) frame/iframe 내부 텍스트 추출 (여러 방법 시도)
+        page_text = ""
+        # 방법A: 모든 frame/iframe 텍스트 합치기
+        try:
+            page_text = driver.execute_script(
+                "var texts=[];"
+                "try{texts.push(document.body.innerText);}catch(e){}"
+                "for(var i=0;i<window.frames.length;i++){"
+                "  try{texts.push(window.frames[i].document.body.innerText);}catch(e){}"
+                "}"
+                "return texts.join('\n');"
+            ) or ""
+        except Exception:
+            pass
+        # 방법B: Selenium frame switch
+        if not page_text.strip():
+            try:
+                frames = driver.find_elements(By.TAG_NAME, "frame") +                          driver.find_elements(By.TAG_NAME, "iframe")
+                for frm in frames:
+                    try:
+                        driver.switch_to.frame(frm)
+                        page_text += driver.execute_script(
+                            "return document.body ? document.body.innerText : '';") or ""
+                        driver.switch_to.default_content()
+                    except Exception:
+                        driver.switch_to.default_content()
+            except Exception:
+                pass
+        # 방법C: BeautifulSoup fallback
+        if not page_text.strip():
+            page_text = BeautifulSoup(driver.page_source, "html.parser").get_text()
+        # -- 3) 사업자번호 파싱 (XXX-XX-XXXXX 형식)
+        biz_nos = re.findall(r"\d{3}-\d{2}-\d{5}", page_text)
+        buyer_biz = (get_setting("buyer_biz_no") or "").replace("-", "")
+        for bno in biz_nos:
+            cleaned = bno.replace("-", "")
+            if cleaned != buyer_biz:
+                result["supplier_biz_no"] = cleaned
+                break
+        if not result["supplier_biz_no"] and biz_nos:
+            result["supplier_biz_no"] = biz_nos[0].replace("-", "")
+        # -- 4) 금액 파싱
         for label, key in [("공급가액", "supply_amount"),
                             ("세액", "tax_amount"),
                             ("합계금액", "total_amount"),
                             ("합 계", "total_amount"),
                             ("합계", "total_amount")]:
-            m2 = re.search(label + r'[^\d]*([\d,]+)', page_text)
+            m2 = re.search(label + r"[^\d]{0,10}([\d,]{4,})", page_text)
             if m2:
-                result[key] = int(m2.group(1).replace(",", ""))
+                val = int(m2.group(1).replace(",", ""))
+                if val > 0:
+                    result[key] = val
         if not result["total_amount"] and result["supply_amount"]:
             result["total_amount"] = result["supply_amount"] + result["tax_amount"]
-        m = re.search(r'(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})', page_text)
+        # -- 5) 발행일자
+        m = re.search(r"(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", page_text)
         if m:
             result["issue_date"] = f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
-        m = re.search(r'상\s*호[^\w가-힣]*([^\n\r\t,]{2,20})', page_text)
+        # -- 6) 공급자 상호
+        m = re.search(r"상\s*호[^\w가-힣]*([^\n\r\t,]{2,20})", page_text)
         if m:
             result["supplier_name"] = m.group(1).strip()
-        m = re.search(r'품\s*목[^\w가-힣]*([^\n\r\t,]{2,30})', page_text)
+        # -- 7) 품목
+        m = re.search(r"품\s*목[^\w가-힣]*([^\n\r\t,]{2,30})", page_text)
         if m:
             result["item_name"] = m.group(1).strip()
-        dl_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
-        os.makedirs(dl_dir, exist_ok=True)
-        for btn in driver.find_elements(By.CSS_SELECTOR,
-            "a[href*='.pdf'], button[onclick*='pdf'], a[onclick*='pdf'], "
-            "input[value*='PDF'], a[title*='인쇄'], button[title*='인쇄']"):
-            try:
-                btn.click()
-                time.sleep(3)
-                files = sorted(
-                    [os.path.join(dl_dir, f) for f in os.listdir(dl_dir)],
-                    key=os.path.getmtime, reverse=True)
-                if files:
-                    result["pdf_path"] = files[0]
-                break
-            except Exception:
-                continue
     except Exception as e:
         result["error"] = str(e)
     return result
