@@ -1,0 +1,1 @@
+﻿import requests, warnings; warnings.filterwarnings("ignore"); r = requests.get("https://ngwx.ktbizoffice.com/LoginN.aspx?compid=obase", verify=False, timeout=10); open("c:/tax_portal/login_page.html","w",encoding="utf-8").write(r.text)

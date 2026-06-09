@@ -1,0 +1,398 @@
+
+<!DOCTYPE HTML >
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>::: (주)오픈베이스 그룹 Groupware :::</title>
+    <link href="/css/login_basic.css?ver=20210318150852000" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="crypto/Barrett.js"></script>
+    <script type="text/javascript" src="crypto/RSA.js"></script>
+    <script type="text/javascript" src="crypto/logAddon.js"></script>
+    <script type="text/javascript" src="crypto/BigInt.js"></script>
+    <!-- 20171030 이승중 : 로그인 캡챠 추가 - 다국어처리-->
+    <script type="text/javascript" src="/lang/home1.js"></script>
+    <script type="text/javascript">
+        var gBFSLogin = "0";
+        var currURL = document.URL;
+
+        //20180418 로고 이미지
+        var loginImageUrl = "/Upload_CompanyLogo/obase/{70C3D761-5E19-4702-8B90-331840EBCFB3}_openbase_logo_186.png";
+        var companyLoginUrl = "/Upload_LoginImage/obase/{CFBE0253-5C3A-4E14-B723-D1E07BFA67E7}_250617.gif";
+        function login_encrypt()
+        {
+            if (document.all("TextUserID").value == "")
+            {
+                alert("사용자 아이디를 입력하여 주십시요");
+                document.all("TextUserID").focus();
+                event.returnValue = false;
+                return false;
+            }
+
+            if (document.all("TextPassword").value == "")
+            {
+                alert("비밀번호를 입력하여 주십시요");
+                document.all("TextPassword").focus();
+                event.returnValue = false;
+                return false;
+            }
+
+            
+            
+            
+
+            //20170828:로그인 Cross 단일화 처리
+            //2014.07.23 : Cross 로그인 분기처리
+
+                initKey();
+
+                document.getElementById("EncryptUserID").value = encryptedString(key, base64encode(document.getElementById("TextUserID").value));
+                document.getElementById("EncryptPassword").value = encryptedString(key, base64encode(document.getElementById("TextPassword").value));
+                document.all("Encryptcid").value = "obase";
+                document.getElementById("TextUserID").value = "";
+                document.getElementById("TextPassword").value = "";
+
+        }
+
+        // 20051108 : 암호 입력시 Caps Lock키가 눌려 있으면 안내메시지를 보여준다.
+        function fnKeyPress(e)
+        {
+            var keyCode = 0;
+            var shiftKey = false;
+            keyCode = e.keyCode;
+            shiftKey = e.shiftKey;
+            if ((keyCode >= 65 && keyCode <= 90) && !shiftKey)
+            {
+                fnShowCapsLockMsg();
+            } else
+            {
+                fnHiddenCapsLockMsg();
+            }
+        }
+        function fnKeyDown(e)
+        {
+            var keyCode = 0;
+            keyCode = e.keyCode;
+            if (keyCode == 20)
+            {
+                fnHiddenCapsLockMsg();
+            }
+        }
+        function fnShowCapsLockMsg()
+        {
+            //divCapsLock.style.pixelTop = (document.body.clientHeight / 2)-20 //(154 / 2);
+            //divCapsLock.style.pixelLeft = (document.body.clientWidth / 2)+300//(502 / 2);
+            divCapsLock.style.visibillity = "Show";
+            divCapsLock.style.display = "block";
+        }
+        function fnHiddenCapsLockMsg()
+        {
+
+            //divCapsLock.style.pixelTop = -154;
+            //divCapsLock.style.pixelLeft = -502;
+            divCapsLock.style.visibillity = "Hidden";
+            divCapsLock.style.display = "none";
+        }
+
+        function Messenger_Onclick()
+        {
+            window.location = "/ezMessenger/setup.exe";
+        }
+
+        function help_Onclick()
+        {
+            window.open("/help/help.aspx", "helpWindow", "height=550px,width=815px, status = no, toolbar=no, menubar=no, location=no, resizable=0");
+        }
+
+        function setting_click()
+        {
+            var ver = navigator.userAgent;
+
+            //2012.09.17 : IE6 버전 설명 내림
+            if (ver.indexOf("MSIE 9.0") > -1)
+                window.open("../setting/usersetting_ie8.html", "", "height=768,width=1024, scrollbars=yes, status = yes, toolbar=yes, menubar=yes, location=yes, resizable=yes");
+            else if (ver.indexOf("MSIE 8.0") > -1)
+                window.open("../setting/usersetting_ie8.html", "", "height=768,width=1024, scrollbars=yes, status = yes, toolbar=yes, menubar=yes, location=yes, resizable=yes");
+            else //if(ver.indexOf("MSIE 7.0") > -1)
+                window.open("../setting/usersetting_IE11.html", "", "height=768,width=1024, scrollbars=yes, status = yes, toolbar=yes, menubar=yes, location=yes, resizable=yes");
+            //else
+            //    window.open("../setting/usersetting_IE6.html","","height=768,width=1024, scrollbars=yes, status = yes, toolbar=yes, menubar=yes, location=yes, resizable=yes");
+        }
+        function banner_settingClick()
+        {
+            
+            //location.reload();
+            //alert("캐쉬 정보가 삭제되었습니다.\n\r브라우저를 재시작하여 주시기 바랍니다.");
+
+            window.location.href = "/ezMessenger/ezIcd2_setup.zip";
+            alert("설치 파일을 저장하고, 모든 브라우저를 종료 후\n다운 받은 파일을 실행하여 주시기 바랍니다.");
+        }
+        function IEToolDown()
+        {
+            window.location.href = "/contactus_upload/ETC/IESetting.zip";
+        }
+    </script>
+
+    <!-- sso 관련 인증 처리를 위해 with Ksign-->
+    <!--아래 쪽 div id='ksign' 참고바람-->
+    <script language="javascript" type="text/javascript">
+        //2015.06.19 : (voc-153366) ksign 체크부분 주석처리
+        //function checkAX()
+        //{
+        //    var Installed = false;
+        //    var AxLogoutID = "KALogoutComponent.Logout.1"
+
+        //    try
+        //    {
+        //        var xObj = new ActiveXObject(AxLogoutID);
+
+        //        if (xObj)
+        //            Installed = true;
+        //        else
+        //            Installed = false;
+
+        //    } catch (ex)
+        //    {
+        //        Installed = false;
+        //    }
+
+        //    return Installed;
+        //}
+
+        function logout()
+        {
+            
+            
+                        
+
+            //20180418 자체 소스로 대체
+            //fnHiddenCapsLockMsg(); // ie9 호환성. window.onload 함수 안의 호출 함수를 이부분으로 대체함
+
+            //20180418 로고 이미지 교체
+            document.getElementById('Img_Login').setAttribute('src', loginImageUrl);
+            document.getElementById('Img_Login').style.width = "186px";
+            document.getElementById('Img_Login').style.height = "40px";
+
+            document.getElementById('LoginButton').setAttribute('src', "/images/login/basic/btn_login.gif");            
+
+            document.getElementById('TextUserID').setAttribute('onblur', "if (this.value.length==0) {this.className='input_text'}else {this.className='input_text focusnot'};");
+            document.getElementById('TextUserID').setAttribute('onfocus', "this.className='input_text focus'");
+            document.getElementById('TextUserID').setAttribute('onkeydown', "if(this.className != 'input_text focus') this.className='input_text focus';");
+
+            document.getElementById('TextPassword').setAttribute('onchange', "if(this.value.length!=0){this.className='input_text focus'};");
+            document.getElementById('TextPassword').setAttribute('onblur', "if (this.value.length==0) {this.className='input_text'}else {this.className='input_text focusnot'};");
+            document.getElementById('TextPassword').setAttribute('onfocus', "this.className='input_text focus'");    
+
+            if (companyLoginUrl == "") {
+                document.getElementById("companyLoginImage").style.background = "url('/images/login/basic/login_img01.png') no-repeat center;";
+            }
+            else {
+                //document.getElementById("companyLoginImage").style.background = "url('" + companyLoginUrl + "') no-repeat center;";
+                document.getElementById("companyLoginImage").style.backgroundImage = "url('" + companyLoginUrl + "')";
+                document.getElementById("companyLoginImage").style.backgroundRepeat = "no-repeat";
+                document.getElementById("companyLoginImage").style.backgroundPosition = "center";
+            }
+
+            //2025.01.15 hsj 특정회사 로그인 백그라운드 이미지 수정
+            if ("obase" == "cns521360" || "obase" == "withkt27")
+            {
+                document.getElementById("loginbody").style.backgroundImage = "url('/images/login/cns521360_bg_img.jpg')";
+                document.getElementById("loginbody").style.backgroundSize = "cover";
+            }
+
+ 
+            if(typeof(document.activeElement) != "undefined"){
+                if (document.activeElement.id == "TextUserID") {
+                    document.getElementById('TextUserID').className = 'input_text focus';
+                }
+                else if (document.activeElement.id == "TextPassword") {
+                    document.getElementById('TextPassword').className = 'input_text focus';
+                }
+            }
+
+            //아이디 저장인 경우
+            if (document.getElementById('TextUserID').value.length > 0) {
+                document.getElementById('TextUserID').className = 'input_text focus';
+            }
+
+            //2015.06.19 : (voc-153366) ksign 체크부분 주석처리
+            //if (checkAX())
+            //{
+            //    document.AxLogout.Logout();
+            //}
+
+            // 팝업공지 시작
+            if ("No" == "OK")
+            {
+                var pheight = window.screen.availHeight;
+                var pwidth = window.screen.availWidth;
+                //var pTop = (pheight - 656) / 2;
+                //var pLeft = (pwidth - 760) / 2;
+
+                //2013.07.30 : bugID(765) - 메일창 사이즈 조절(기존 width : 760px) 및 가운데위치로 띄우기
+                var conHeight = pheight * 0.8;
+                var pTop = (pheight - conHeight) / 2;
+                //var pTop = (pheight - 656) / 2;
+                var pLeft = (pwidth - 760) / 2;
+
+                window.open("/Common/WebPart/ShowPopUp.aspx?itemseq=708&answer=", "", "top=" + pTop + ",left=" + pLeft + ", height=400px,width=600px, status = no, toolbar=no,menubar=no,location=no, resizable=0");
+            }
+            // 팝업공지 끝
+
+
+        }
+
+        function showContents()
+        {
+            if ("True" == "True")
+                window.open("http://biz.olleh.com/Contentsmall_M/contentmallMain.asp?lo=03&src=image&kw=000002", "");
+            else
+                window.open("http://183.110.206.139/Contentsmall_M/contentmallMain.asp?lo=03&src=image&kw=000002", "");
+        }
+
+        function onKeyUpEvent(e)
+        {
+            var curevent = (typeof event == 'undefined' ? e : event)
+            if (navigator.userAgent.indexOf('Firefox') != -1)
+            {
+                if (curevent.originalTarget.id != "TextUserID")
+                {
+                    kc = curevent.keyCode ? curevent.keyCode : curevent.which;
+                    sk = curevent.shiftKey ? curevent.shiftKey : ((kc == 16) ? true : false);
+                    if (((kc >= 65 && kc <= 90) && !sk) || ((kc >= 97 && kc <= 122) && sk))
+                    {
+                        var leftposition = document.documentElement.clientWidth / 2;
+                        var topposition = document.documentElement.clientHeight / 2;
+
+                        document.getElementById("divCapsLock").style.left = (leftposition) + 75 + "PX";
+                        document.getElementById("divCapsLock").style.top = (topposition) - 40 + "PX";
+                        fnShowCapsLockMsg();
+                    }
+                    else
+                        fnHiddenCapsLockMsg();
+                }
+            }
+            else
+            {
+                if (curevent.srcElement.id != "TextUserID")
+                {
+                    kc = curevent.keyCode ? curevent.keyCode : curevent.which;
+                    sk = curevent.shiftKey ? curevent.shiftKey : ((kc == 16) ? true : false);
+                    if (((kc >= 65 && kc <= 90) && !sk) || ((kc >= 97 && kc <= 122) && sk))
+                    {
+                        var leftposition = document.documentElement.clientWidth / 2;
+                        var topposition = document.documentElement.clientHeight / 2;
+
+                        document.getElementById("divCapsLock").style.left = (leftposition) + 75 + "PX";
+                        document.getElementById("divCapsLock").style.top = (topposition) - 40 + "PX";
+                        fnShowCapsLockMsg();
+                    }
+                    else
+                        fnHiddenCapsLockMsg();
+                }
+            }
+        }
+
+        function btnReturnClick() {
+            window.location.reload();
+        }
+		
+		// 정은하(20210128) PW 찾기 기능: 버튼 클릭 시 동작하는 함수
+        function findPassword() {
+            var pheight = window.screen.availHeight;
+            var pwidth = window.screen.availWidth;
+
+            var conHeight = pheight * 0.8;
+            var pTop = (pheight - conHeight) / 2;
+            var pLeft = (pwidth - 760) / 2;
+
+            var pCompId = "obase";
+
+            window.open("FindPassword.aspx?compid=" + pCompId, "", "top=" + pTop + ",left=" + pLeft + ", height=336px,width=580px, status = no, toolbar=no,menubar=no,location=no, resizable=0");
+        }
+    </script>
+
+</head>
+<body id="loginbody" class="loginbody" onload="logout()" >
+    <!--<div id='ksign' style='position:absolute; left:0px; top:0px;' width:'100%;' height:'100%;'>-->
+    <!--2013/03/20 텍스트 박스 마우스 커서위치 오류로 width, height 삭제-->
+    <!--//2015.06.19 : (voc-153366) ksign 체크부분 주석처리-->
+    
+
+
+
+
+  <div class="login_warpper">
+		<!-- //20180821 이미지 링크 추가 -->
+		<a id="linkImage">
+			<div id="companyLoginImage" class="login_layout01" style="background-size:contain;"></div>
+		</a>
+        <div class="login_layout02">
+            <div class="login_form">
+                <p class="title" style="width: 186px;"><img id="Img_Login" border="0" /></p>
+                <!-- 로그인폼 -->
+                <form name="Form1" method="post" action="./LoginN.aspx?compid=obase" id="Form1" onsubmit="return login_encrypt();">
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="/wEPDwUKMTY4NDk5ODQyMA8WAh4TVmFsaWRhdGVSZXF1ZXN0TW9kZQIBFggCAg9kFgICBw8PFgIeDUFsdGVybmF0ZVRleHQFCeuhnOq3uOyduGRkAgMPFgIeBXN0eWxlBT1kaXNwbGF5Om5vbmU7YmFja2dyb3VuZC1pbWFnZTp1cmwoL3NraW4xL2Jhc2ljL2xvZ2luL2lkLmdpZik7ZAIEDxYCHwIFPWRpc3BsYXk6bm9uZTtiYWNrZ3JvdW5kLWltYWdlOnVybCgvc2tpbjEvYmFzaWMvbG9naW4vcHcuZ2lmKTtkAgUPFgIfAgVCZGlzcGxheTpub25lO2JhY2tncm91bmQtaW1hZ2U6dXJsKC9za2luMS9iYXNpYy9sb2dpbi9zYXZlX2lkLmdpZik7ZBgBBR5fX0NvbnRyb2xzUmVxdWlyZVBvc3RCYWNrS2V5X18WAgULTG9naW5CdXR0b24FD0NoZWNrU2F2ZVVzZXJJRORlCUtKtrMVVkb3vQJpn5jpoz2j" />
+
+<input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="2CDD2561" />
+<input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="/wEdAAtW5rK+bdLTRhP3/vfm2XDaFi6QaAY0wMbNMbW3QlAcct5lw99SYJ+Wv9EE4DvTk2DTtPfEXon3buLyi2A4cvt2PupCIh0bvqXx50bENPKeqGTPfkTn/GgJJnD5gZ3zq1vyXTzzKPHbGX5+fIOIY9zYim8u8fkVZi590D3ZT2MGQ9ypqPqLgdpphNzIPTIm7G6WOrIQKlaZ6xgp1x4qZOcMESCFkFW/RuhzY1oLb/NUVCsCgi3iwG2eZREaLnFFIEE9majN" />
+                
+				            
+				
+				
+					
+				
+                    <input type="hidden" name="seq" value="" />
+                    <input type="hidden" name="pageNum" value="" />
+                    <input type="hidden" name="sel_part" value="" />
+                    <fieldset>
+                        <legend>로그인 폼</legend>                            
+                        <p class="id">
+                            <input name="TextUserID" type="text" id="TextUserID" class="input_text" style="ime-mode: disabled;" />
+                            <label for="TextUserID" style="visibility: hidden; width: 0px; height: 0px; overflow: hidden; font-size: 0px !important; position: absolute;">아이디</label>
+                        </p>
+                        <p class="pw">                            
+                            <label for="TextPassword" style="visibility: hidden; width: 0px; height: 0px; overflow: hidden; font-size: 0px !important; position: absolute;">비밀번호</label>
+                            <label for="EncryptUserID"></label>
+                            <label for="EncryptPassword"></label>
+                            <label for="Encryptcid"></label>
+                            <input name="TextPassword" type="password" id="TextPassword" class="input_text" style="ime-mode: inactive;" />
+                            <input name="EncryptUserID" type="text" id="EncryptUserID" style="DISPLAY: none" />
+                            <input name="EncryptPassword" type="text" id="EncryptPassword" style="DISPLAY: none" />
+                            <input name="Encryptcid" type="text" id="Encryptcid" style="DISPLAY: none" />
+                            <input name="publicModulus" type="text" value="BA266B355709A6E8211D3D3D0FA0B04093D5C53BC06EA88B281B1648168F148603D66166EB580418CCCA9579BF4F1752E61072236F08401DBFEEC40F416CEED1E9FD5270419635E2DBC9A25AB092D14E356B1DD171EDE771C770AE084F14B1F9C2446BB38CE76A71F47A4B7DA809CCAD3C1F870CBF1002A43CCB8AE36697379B" id="publicModulus" style="DISPLAY: none" />
+                            <input name="publicExponent" type="text" value="010001" id="publicExponent" style="DISPLAY: none" />
+                        </p>
+                        <input type="image" name="LoginButton" id="LoginButton" tabindex="3" class="btn_login" src="/images/login/basic/btn_login.gif" alt="로그인" border="0" style="CURSOR: pointer" />                   
+                        <p class="saveid">
+                            <input id="CheckSaveUserID" type="checkbox" name="CheckSaveUserID" />
+                            <label for="CheckSaveUserID"><span></span>아이디 저장</label>
+                            <div style="display: none">
+                                <label for="TextBox1"></label>
+                                <input name="TextBox1" type="text" id="TextBox1" />
+                            </div>
+                        </p>                        
+                        <!-- 정은하(20210128) PW 찾기 기능: PW 찾기 버튼 생성 -->
+                        <span style="left: 8px; font-size: 7pt; top: -17px;">|</span>
+                        <p style="display: inline-block; margin: 0; position: relative; top: -16px; left: 11px; padding: 0; font-size: 9pt; cursor: pointer" onclick="findPassword();">비밀번호 찾기</p>
+                        <!--//20231227:에프앤비네트웍스 커스텀 작업-->
+                        
+                        <p class="call"><span class="icon"></span><span class="txt">헬프센터 080-2580-005</span></p>
+                        
+                    </fieldset>
+                
+<script>document.all['TextUserID'].focus();</script></form>
+                <!-- //로그인폼 -->
+                <div class="footer">
+                    <p>ⓒ 2003-2026. bizmeka. All rights reserved.</p>
+                </div>
+				<!-- //20180823 서버이름 표시 추가 // 20250423 hsy 서버이름 위치 수정 //2025.06.10 hsj 서버이름 위치 수정 -->
+				<span style="position: absolute; color: White; top: 320px">WEBN3</span>
+            </div>
+			
+        </div>
+</div>
+    <div id="ImgLoginID" class="id" style="display:none;background-image:url(/skin1/basic/login/id.gif);"></div>
+    <div id="ImgLoginPW" class="id" style="display:none;background-image:url(/skin1/basic/login/pw.gif);"></div>
+    <div id="ImgIdSave" class="id" style="display:none;background-image:url(/skin1/basic/login/save_id.gif);"></div>
+</body>
+</html>
