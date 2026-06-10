@@ -199,12 +199,46 @@ def _parse_taxbill_page(driver, taxbill_url):
         "item_name": "", "pdf_path": "",
     }
     try:
+        import datetime
+        from selenium.webdriver.common.action_chains import ActionChains
+
+        original_handle = driver.current_window_handle
+        all_handles_before = set(driver.window_handles)
         driver.get(taxbill_url)
         time.sleep(4)
-        # -- 1) 스크린샷 저장 (페이지 로드 직후)
+        new_handles = set(driver.window_handles) - all_handles_before
+        if new_handles:
+            driver.switch_to.window(new_handles.pop())
+            time.sleep(3)
+
+        buyer_biz = (get_setting("buyer_biz_no") or "").replace("-", "").replace(" ", "")
+        frames = driver.find_elements(By.TAG_NAME, "frame") + driver.find_elements(By.TAG_NAME, "iframe")
+        if frames and buyer_biz and len(buyer_biz) >= 10:
+            driver.switch_to.frame(frames[0])
+            time.sleep(1)
+            try:
+                el1 = driver.find_element(By.NAME, "CORP_NO1")
+                el2 = driver.find_element(By.NAME, "CORP_NO2")
+                el3 = driver.find_element(By.NAME, "CORP_NO3")
+                ActionChains(driver).click(el1).send_keys(buyer_biz[0:3]).perform(); time.sleep(0.5)
+                ActionChains(driver).click(el2).send_keys(buyer_biz[3:5]).perform(); time.sleep(0.5)
+                ActionChains(driver).click(el3).send_keys(buyer_biz[5:10]).perform(); time.sleep(0.5)
+            except Exception:
+                pass
+            for img in driver.find_elements(By.TAG_NAME, "img"):
+                if "btn_inq_confirm" in (img.get_attribute("src") or ""):
+                    try:
+                        ActionChains(driver).move_to_element(img).click().perform()
+                        time.sleep(6)
+                    except Exception:
+                        pass
+                    break
+            driver.switch_to.default_content()
+            time.sleep(2)
+
+        # 스크린샷
         dl_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
         os.makedirs(dl_dir, exist_ok=True)
-        import datetime
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = os.path.join(dl_dir, f"taxbill_{ts}.png")
         try:
@@ -212,9 +246,9 @@ def _parse_taxbill_page(driver, taxbill_url):
             result["pdf_path"] = screenshot_path
         except Exception:
             pass
-        # -- 2) frame/iframe 내부 텍스트 추출 (여러 방법 시도)
+
+        # 텍스트 추출
         page_text = ""
-        # 방법A: 모든 frame/iframe 텍스트 합치기
         try:
             page_text = driver.execute_script(
                 "var texts=[];"
@@ -226,62 +260,110 @@ def _parse_taxbill_page(driver, taxbill_url):
             ) or ""
         except Exception:
             pass
-        # 방법B: Selenium frame switch
         if not page_text.strip():
-            try:
-                frames = driver.find_elements(By.TAG_NAME, "frame") +                          driver.find_elements(By.TAG_NAME, "iframe")
-                for frm in frames:
-                    try:
-                        driver.switch_to.frame(frm)
-                        page_text += driver.execute_script(
-                            "return document.body ? document.body.innerText : '';") or ""
-                        driver.switch_to.default_content()
-                    except Exception:
-                        driver.switch_to.default_content()
-            except Exception:
-                pass
-        # 방법C: BeautifulSoup fallback
+            for frm in (driver.find_elements(By.TAG_NAME, "frame") +
+                        driver.find_elements(By.TAG_NAME, "iframe")):
+                try:
+                    driver.switch_to.frame(frm)
+                    page_text += BeautifulSoup(driver.page_source, "html.parser").get_text() + "\n"
+                    driver.switch_to.default_content()
+                except Exception:
+                    driver.switch_to.default_content()
         if not page_text.strip():
             page_text = BeautifulSoup(driver.page_source, "html.parser").get_text()
-        # -- 3) 사업자번호 파싱 (XXX-XX-XXXXX 형식)
+
+        # 줄 단위 파싱
+        lines = [l.strip() for l in page_text.splitlines()]
+        nlines = len(lines)
+
+        def next_val(keyword, search_range=10):
+            for i, l in enumerate(lines):
+                if keyword in l:
+                    for j in range(i+1, min(i+search_range, nlines)):
+                        if lines[j]:
+                            return lines[j], i
+            return "", -1
+
+        def is_amount(s):
+            return bool(re.match(r"^[1-9][\d,]+$", s))
+
+        # 1) 공급자 사업자번호
         biz_nos = re.findall(r"\d{3}-\d{2}-\d{5}", page_text)
-        buyer_biz = (get_setting("buyer_biz_no") or "").replace("-", "")
+        buyer_biz2 = (get_setting("buyer_biz_no") or "").replace("-", "")
         for bno in biz_nos:
             cleaned = bno.replace("-", "")
-            if cleaned != buyer_biz:
+            if cleaned != buyer_biz2:
                 result["supplier_biz_no"] = cleaned
                 break
-        if not result["supplier_biz_no"] and biz_nos:
-            result["supplier_biz_no"] = biz_nos[0].replace("-", "")
-        # -- 4) 금액 파싱
-        for label, key in [("공급가액", "supply_amount"),
-                            ("세액", "tax_amount"),
-                            ("합계금액", "total_amount"),
-                            ("합 계", "total_amount"),
-                            ("합계", "total_amount")]:
-            m2 = re.search(label + r"[^\d]{0,10}([\d,]{4,})", page_text)
-            if m2:
-                val = int(m2.group(1).replace(",", ""))
-                if val > 0:
-                    result[key] = val
-        if not result["total_amount"] and result["supply_amount"]:
-            result["total_amount"] = result["supply_amount"] + result["tax_amount"]
-        # -- 5) 발행일자
-        m = re.search(r"(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", page_text)
-        if m:
-            result["issue_date"] = f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
-        # -- 6) 공급자 상호
-        m = re.search(r"상\s*호[^\w가-힣]*([^\n\r\t,]{2,20})", page_text)
-        if m:
-            result["supplier_name"] = m.group(1).strip()
-        # -- 7) 품목
-        m = re.search(r"품\s*목[^\w가-힣]*([^\n\r\t,]{2,30})", page_text)
-        if m:
-            result["item_name"] = m.group(1).strip()
+
+        # 2) 공급자 상호명 - 첫번째 "상호(법인명)" 다음 줄
+        for i, l in enumerate(lines):
+            if "상호(법인명)" in l:
+                for j in range(i+1, min(i+5, nlines)):
+                    if lines[j] and lines[j] not in ("성명","상호(법인명)","사업장주소"):
+                        result["supplier_name"] = lines[j]
+                        break
+                if result["supplier_name"]:
+                    break
+
+        # 3) 합계금액 - "합계금액" 이후 첫 번째 금액(콤마포함 숫자)
+        for i, l in enumerate(lines):
+            if l == "합계금액":
+                for j in range(i+1, min(i+15, nlines)):
+                    if is_amount(lines[j]):
+                        result["total_amount"] = int(lines[j].replace(",", ""))
+                        break
+                break
+
+        # 4) 공급가액/세액 - "단가" 다음 줄들에서 금액 2개 연속
+        for i, l in enumerate(lines):
+            if l == "단가":
+                # 단가 이후: 단가값, 공급가액값, 세액값 순서
+                amounts = []
+                for j in range(i+1, min(i+20, nlines)):
+                    if is_amount(lines[j]):
+                        amounts.append(int(lines[j].replace(",", "")))
+                    if len(amounts) >= 5:
+                        break
+                if len(amounts) >= 2:
+                    result["supply_amount"] = amounts[-2]
+                    result["tax_amount"] = amounts[-1]
+                break
+
+        # 공급가액 fallback
+        if not result["supply_amount"] and result["total_amount"] and result["tax_amount"]:
+            result["supply_amount"] = result["total_amount"] - result["tax_amount"]
+
+        # 5) 발행일 - "발행일자" 다음 줄
+        val, _ = next_val("발행일자", 3)
+        if re.match(r"\d{4}-\d{2}-\d{2}", val):
+            result["issue_date"] = val
+        if not result["issue_date"]:
+            m3 = re.search(r"(\d{4}-\d{2}-\d{2})", page_text)
+            if m3:
+                result["issue_date"] = m3.group(1)
+
+        # 6) 품목명 - "품목" 헤더 이후 첫 번째 비어있지 않은 비숫자 줄
+        for i, l in enumerate(lines):
+            if l == "품목":
+                for j in range(i+1, min(i+20, nlines)):
+                    nm = lines[j]
+                    if nm and not re.match(r"^[\d\s,]+$", nm) and nm not in ("규격","수량","단가","공급가액","세액","비고"):
+                        result["item_name"] = nm[:30]
+                        break
+                break
+
+        # 새창 닫고 복귀
+        try:
+            if driver.current_window_handle != original_handle:
+                driver.close()
+                driver.switch_to.window(original_handle)
+        except Exception:
+            pass
+
     except Exception as e:
         result["error"] = str(e)
     return result
-
 
 def _submit_expense(driver, base_url, invoice_data, pdf_path=None):
     auto_submit = (get_setting("auto_submit") or "false").lower() == "true"
