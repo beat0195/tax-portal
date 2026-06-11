@@ -125,7 +125,7 @@ def _get_mail_list_js(driver, base_url, keyword="", max_count=200):
         "var xhr = new XMLHttpRequest();"
         "xhr.open('POST', '/myoffice/ezEmail/remote/mail_get_list_cross.aspx', false);"
         "xhr.setRequestHeader('Content-Type', 'text/xml; charset=utf-8');"
-        "xhr.send('" + xml_body.replace("'", "\'") + "');"
+        "xhr.send('" + xml_body.replace("'", "\\'") + "');"
         "return xhr.responseText;"
     )
     xml_text = driver.execute_script(js)
@@ -148,26 +148,16 @@ def _get_mail_list_js(driver, base_url, keyword="", max_count=200):
     return mails
 
 def _get_mail_body_html(driver, base_url, mail_id):
-    """
-    Exchange ActiveSync XML API로 메일 본문 HTML을 가져옵니다.
-    mail_id: AAMkAG... 형식의 Exchange mail ID
-    """
     try:
-        # 방법 1: XML API로 메일 본문 직접 조회
-        xml_body = (
-            "<DATA>"
-            "<MAILID>" + mail_id + "</MAILID>"
-            "<BODYTYPE>2</BODYTYPE>"
-            "</DATA>"
-        )
+        xml_body = "<DATA><MAILID>" + mail_id + "</MAILID><BODYTYPE>2</BODYTYPE></DATA>"
         js = (
             "var xhr = new XMLHttpRequest();"
             "xhr.open('POST', '/myoffice/ezEmail/remote/mail_get_body.aspx', false);"
             "xhr.setRequestHeader('Content-Type', 'text/xml; charset=utf-8');"
-            "xhr.send('" + xml_body.replace("'", "\'").replace("\n","") + "');"
+            "xhr.send(arguments[0]);"
             "return xhr.responseText;"
         )
-        xml_text = driver.execute_script(js)
+        xml_text = driver.execute_script(js, xml_body)
         if xml_text and len(xml_text) > 100:
             soup_xml = BeautifulSoup(xml_text, "lxml-xml")
             body_el = soup_xml.find("body") or soup_xml.find("Body") or soup_xml.find("BODY")
@@ -175,16 +165,11 @@ def _get_mail_body_html(driver, base_url, mail_id):
                 body_html = body_el.get_text()
                 if len(body_html) > 50:
                     return body_html
-            # XML 전체에서 HTML 추출 시도
             if "<html" in xml_text.lower() or "<a " in xml_text.lower():
                 return xml_text
-
-        # 방법 2: 메일 읽기 페이지를 Selenium으로 열어서 iframe 내용 추출
         read_url = base_url + "/myoffice/ezEmail/mail_read.aspx?id=" + requests.utils.quote(mail_id)
         driver.get(read_url)
         time.sleep(3)
-
-        # iframe 내부 HTML 추출
         iframes = driver.find_elements(By.TAG_NAME, "iframe")
         for iframe in iframes:
             try:
@@ -196,25 +181,19 @@ def _get_mail_body_html(driver, base_url, mail_id):
             except Exception:
                 driver.switch_to.default_content()
                 continue
-
-        # 방법 3: 페이지 전체 소스에서 추출
         page_html = driver.page_source
         if len(page_html) > 500:
             return page_html
-
         return ""
     except Exception as e:
         print(f"[!] _get_mail_body_html 오류: {e}")
         return ""
 
 def _extract_taxbill_links(html):
-    """메일 본문 HTML에서 세금계산서 관련 URL 추출"""
     if not html:
         return []
     soup = BeautifulSoup(html, "html.parser")
     found = []
-
-    # <a href> 링크에서 추출
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if href and href.startswith("http"):
@@ -222,17 +201,13 @@ def _extract_taxbill_links(html):
                 if domain in href:
                     found.append(href)
                     break
-
-    # 정규식으로 텍스트에서 URL 추출 (링크 태그 없는 경우 대비)
     if not found:
-                        urls = re.findall("https?://[^\\s\"'<>\\]\\[]+", html)
+        urls = re.findall("https?://[^\\s\"'<>]+", html)
         for url in urls:
             for domain in TAXBILL_DOMAINS:
                 if domain in url:
                     found.append(url)
                     break
-
-    # 중복 제거
     seen = set()
     result = []
     for u in found:
@@ -242,7 +217,6 @@ def _extract_taxbill_links(html):
     return result
 
 def _parse_from_mail_body(html):
-    """메일 본문에서 세금계산서 링크, 금액, 사업자번호 1차 파싱"""
     result = {
         "taxbill_url": None,
         "amount": None,
@@ -251,20 +225,16 @@ def _parse_from_mail_body(html):
     }
     if not html:
         return result
-
     links = _extract_taxbill_links(html)
     if links:
         result["taxbill_url"] = links[0]
-
-    # 금액 추출 (원, 천원, 만원 등)
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text()
-
     amount_patterns = [
-        r'공급가액[^d]*(d[d,]+)',
-        r'합계금액[^d]*(d[d,]+)',
-        r'총액[^d]*(d[d,]+)',
-        r'(d[d,]+)s*원',
+        r"공급가액[^\d]*(\d[\d,]+)",
+        r"합계금액[^\d]*(\d[\d,]+)",
+        r"총액[^\d]*(\d[\d,]+)",
+        r"(\d[\d,]+)\s*원",
     ]
     for pat in amount_patterns:
         m = re.search(pat, text)
@@ -274,17 +244,13 @@ def _parse_from_mail_body(html):
                 break
             except Exception:
                 pass
-
-    # 사업자번호 추출
-    biz_pat = r'(d{3}-d{2}-d{5})'
+    biz_pat = r"\b(\d{3}-\d{2}-\d{5})\b"
     biz_m = re.search(biz_pat, text)
     if biz_m:
         result["biz_number"] = biz_m.group(1).replace("-", "")
-
     return result
 
 def _parse_taxbill_page_generic(driver, url):
-    """세금계산서 페이지 범용 파서 - 다양한 공급사 대응"""
     result = {
         "supplier_name": None,
         "supplier_biz_no": None,
@@ -301,17 +267,13 @@ def _parse_taxbill_page_generic(driver, url):
         html = driver.page_source
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text()
-
-        # 사업자번호
-        biz_matches = re.findall(r'(d{3}-d{2}-d{5})', text)
+        biz_matches = re.findall(r"\b(\d{3}-\d{2}-\d{5})\b", text)
         if biz_matches:
             result["supplier_biz_no"] = biz_matches[0].replace("-", "")
-
-        # 금액 파싱
         amount_patterns = [
-            (r'공급가액[^d]*(d[d,]+)', "supply_amount"),
-            (r'세액[^d]*(d[d,]+)', "tax_amount"),
-            (r'합계[^d]*(d[d,]+)', "total_amount"),
+            (r"공급가액[^\d]*(\d[\d,]+)", "supply_amount"),
+            (r"세액[^\d]*(\d[\d,]+)", "tax_amount"),
+            (r"합계[^\d]*(\d[\d,]+)", "total_amount"),
         ]
         for pat, key in amount_patterns:
             m = re.search(pat, text)
@@ -320,95 +282,70 @@ def _parse_taxbill_page_generic(driver, url):
                     result[key] = int(m.group(1).replace(",", ""))
                 except Exception:
                     pass
-
         if result["supply_amount"] and result["tax_amount"] and not result["total_amount"]:
             result["total_amount"] = result["supply_amount"] + result["tax_amount"]
-
-        # 날짜 파싱
-        date_m = re.search(r'(d{4})[년/-.](d{1,2})[월/-.](d{1,2})', text)
+        date_m = re.search(r"(\d{4})[년/\-.](\d{1,2})[월/\-.](\d{1,2})", text)
         if date_m:
             result["issue_date"] = f"{date_m.group(1)}-{date_m.group(2).zfill(2)}-{date_m.group(3).zfill(2)}"
-
-        # 공급자명
         name_patterns = [
-            r'공급자[^
-]*법인명[^
-]*([가-힣A-Za-z(주)(주식회사)s]{2,20})',
-            r'상호[^
-]*([가-힣A-Za-z(주)(주식회사)s]{2,20})',
+            r"공급자[^\n]*법인명[^\n]*([가-힣A-Za-z()\s]{2,20})",
+            r"상호[^\n]*([가-힣A-Za-z()\s]{2,20})",
         ]
         for pat in name_patterns:
             m = re.search(pat, text)
             if m:
                 result["supplier_name"] = m.group(1).strip()
                 break
-
     except Exception as e:
         print(f"[!] _parse_taxbill_page_generic 오류: {e}")
     return result
 
 def run_pipeline(log_fn=None):
-    """메인 파이프라인: 로그인 → 메일 조회 → 세금계산서 파싱 → DB 저장"""
     def log(msg):
         if log_fn:
             log_fn(msg)
         else:
             print(msg)
-
     driver = None
     results = {"processed": 0, "saved": 0, "errors": 0, "skipped": 0}
-
     try:
         base_url = get_setting("groupware_url") or "https://www.bizmeka.com"
         log(f"[*] 그룹웨어 URL: {base_url}")
-
         driver = _make_driver(headless=True)
         _selenium_login(driver, base_url)
         log("[*] 그룹웨어 로그인 완료")
-
         mails = _get_mail_list_js(driver, base_url, max_count=200)
         log(f"[*] 메일 {len(mails)}건 조회")
-
         vendors = get_vendors()
         vendor_map = {}
         for v in vendors:
             biz = str(v.get("biz_number", "")).replace("-", "")
             if biz:
                 vendor_map[biz] = v
-
         for i, mail in enumerate(mails):
             subject = mail.get("subject", "")
             mail_id = mail.get("href", "")
-
-            # 세금계산서 관련 키워드 필터
             keywords = ["세금계산서", "tax", "계산서", "invoice"]
             if not any(kw.lower() in subject.lower() for kw in keywords):
                 continue
-
             log(f"[{i+1}] 처리 중: {subject[:50]}")
             results["processed"] += 1
-
             try:
                 html = _get_mail_body_html(driver, base_url, mail_id)
                 if not html or len(html) < 50:
                     log(f"  -> 본문 없음 스킵")
                     results["skipped"] += 1
                     continue
-
                 parsed = _parse_from_mail_body(html)
                 taxbill_url = parsed.get("taxbill_url")
-
                 if not taxbill_url:
                     log(f"  -> 세금계산서 링크 없음 스킵")
                     results["skipped"] += 1
                     continue
-
                 log(f"  -> 링크 발견: {taxbill_url[:80]}")
                 invoice_data = _parse_taxbill_page_generic(driver, taxbill_url)
-
                 biz_no = invoice_data.get("supplier_biz_no", "")
                 vendor = vendor_map.get(biz_no) if biz_no else None
-
                 save_data = {
                     "mail_subject": subject,
                     "mail_id": mail_id,
@@ -427,15 +364,12 @@ def run_pipeline(log_fn=None):
                 add_invoice(save_data)
                 log(f"  -> 저장 완료: {save_data['supplier_name']} / {save_data['total_amount']:,}원")
                 results["saved"] += 1
-
             except Exception as e:
                 log(f"  -> 오류: {e}")
                 results["errors"] += 1
                 continue
-
         log(f"[*] 완료 - 처리:{results['processed']} 저장:{results['saved']} 오류:{results['errors']} 스킵:{results['skipped']}")
         return True, results
-
     except Exception as e:
         log(f"[!] 파이프라인 오류: {e}")
         return False, str(e)
@@ -457,10 +391,6 @@ def test_connection(target="groupware"):
         _selenium_login(driver, base_url)
         return True, "그룹웨어 로그인 성공"
     except Exception as e:
-        try:
-            if driver: driver.quit()
-        except Exception:
-            pass
         return False, str(e)
     finally:
         if driver:
