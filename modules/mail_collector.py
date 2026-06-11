@@ -1,4 +1,4 @@
-﻿import sys, os, base64, warnings, re, time
+import sys, os, base64, warnings, re, time
 import requests
 from bs4 import BeautifulSoup
 from Crypto.PublicKey import RSA
@@ -7,12 +7,13 @@ from Crypto.Cipher import PKCS1_v1_5
 warnings.filterwarnings("ignore")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from database import (get_setting, add_invoice, get_invoices,
-    get_vendors, find_vendor_by_name, update_invoice_status)
+                      get_vendors, find_vendor_by_name, update_invoice_status)
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.action_chains import ActionChains
 try:
     from webdriver_manager.chrome import ChromeDriverManager
     _USE_WDM = True
@@ -21,6 +22,14 @@ except ImportError:
 
 FOLDER_ID = "AAMkAGUyNWIyYmU4LTBjM2MtNGM4OS04YTE4LWFhZjQ4ZTY3ZmE4ZAAuAAAAAACB7Z4ydzgUQo6MOiLN9ceFAQD2vFdoTp31Tb13wR9oUYV6AAAABH/bAAA="
 
+TAXBILL_DOMAINS = [
+    "taxbill365.com",
+    "esero.go.kr",
+    "etax.hometax.go.kr",
+    "bill.taxinfo.go.kr",
+    "bizforms.co.kr",
+    "biztalk.go.kr",
+]
 
 def _rsa_encrypt(modulus_hex, exponent_hex, plaintext):
     n = int(modulus_hex, 16)
@@ -29,7 +38,6 @@ def _rsa_encrypt(modulus_hex, exponent_hex, plaintext):
     cipher = PKCS1_v1_5.new(key)
     b64_text = base64.b64encode(plaintext.encode("utf-8"))
     return cipher.encrypt(b64_text).hex()
-
 
 def _make_driver(headless=True):
     opts = Options()
@@ -48,11 +56,10 @@ def _make_driver(headless=True):
         driver = webdriver.Chrome(options=opts)
     return driver
 
-
 def _selenium_login(driver, base_url):
     company_id = get_setting("bizmeka_company") or "obase"
-    user_id = get_setting("groupware_id") or ""
-    pw = get_setting("groupware_pw") or ""
+    user_id    = get_setting("groupware_id") or ""
+    pw         = get_setting("groupware_pw") or ""
     driver.get(base_url + "/LoginN.aspx?compid=" + company_id)
     time.sleep(3)
     soup = BeautifulSoup(driver.page_source, "html.parser")
@@ -78,14 +85,12 @@ def _selenium_login(driver, base_url):
     if "Login" in driver.current_url:
         raise Exception("그룹웨어 Selenium 로그인 실패")
 
-
 def _get_session_from_driver(driver, base_url):
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
     for cookie in driver.get_cookies():
         session.cookies.set(cookie["name"], cookie["value"])
     return session
-
 
 def _get_mail_list_js(driver, base_url, keyword="", max_count=200):
     folder_id = FOLDER_ID
@@ -118,90 +123,105 @@ def _get_mail_list_js(driver, base_url, keyword="", max_count=200):
             continue
         href = (resp.find("href") or type("", (), {"text": ""})()).text
         date = (resp.find("receivedt") or type("", (), {"text": ""})()).text
-        sender = (resp.find("sender") or type("", (), {"text": ""})()).text
-        mails.append({
-            "id": href,
-            "subject": subject,
-            "sender": sender,
-            "date": date,
-        })
+        sender_el = resp.find("from") or resp.find("sender")
+        sender = sender_el.text if sender_el else ""
+        mails.append({"subject": subject, "href": href, "date": date, "sender": sender})
     return mails
 
-
-def _get_mail_body_url(base_url, mail_id):
-    import urllib.parse
-    return (base_url + "/myoffice/ezEmail/mail_read_Cross.aspx?URL="
-            + urllib.parse.quote(mail_id))
-
-
-def _extract_taxbill_link(driver, mail_url):
+def _get_mail_body_html(driver, base_url, mail_href):
     try:
-        driver.get(mail_url)
+        js = (
+            "var xhr = new XMLHttpRequest();"
+            "xhr.open('POST', '/myoffice/ezEmail/remote/mail_view_cross.aspx', false);"
+            "xhr.setRequestHeader('Content-Type', 'text/xml; charset=utf-8');"
+            "var body = '<DATA><HREF>" + mail_href.replace("'", "\\'") + "</HREF></DATA>';"
+            "xhr.send(body);"
+            "return xhr.responseText;"
+        )
+        xml_text = driver.execute_script(js)
+        if xml_text:
+            soup = BeautifulSoup(xml_text, "lxml-xml")
+            body_el = soup.find("body") or soup.find("BODY") or soup.find("htmlbody")
+            if body_el:
+                return body_el.text
+        driver.get(base_url + "/myoffice/ezEmail/mail_view.aspx?href=" + mail_href)
         time.sleep(3)
-        # 방법1: JS로 모든 frame 포함 전체 href 추출
-        all_hrefs = driver.execute_script(
-            "var hrefs=[];"
-            "function getLinks(doc){"
-            "  var tags=doc.querySelectorAll('a[href]');"
-            "  for(var i=0;i<tags.length;i++){hrefs.push(tags[i].href);}"
-            "}"
-            "try{getLinks(document);}catch(e){}"
-            "for(var i=0;i<window.frames.length;i++){"
-            "  try{getLinks(window.frames[i].document);}catch(e){}"
-            "}"
-            "return hrefs;"
-        ) or []
-        for href in all_hrefs:
-            if href and ("taxbill" in href.lower() or "etax" in href.lower() or "hot_gate" in href.lower()):
-                return href
-        # 방법2: Selenium frame switch
-        frames = driver.find_elements(By.TAG_NAME, "frame") + driver.find_elements(By.TAG_NAME, "iframe")
-        for frm in frames:
-            try:
-                driver.switch_to.frame(frm)
-                soup2 = BeautifulSoup(driver.page_source, "html.parser")
-                link = _find_taxbill_link_in_soup(soup2)
-                driver.switch_to.default_content()
-                if link:
-                    return link
-            except Exception:
-                driver.switch_to.default_content()
-        # 방법3: page_source 직접 파싱
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        return _find_taxbill_link_in_soup(soup)
+        return driver.page_source
     except Exception:
-        return None
+        return ""
 
-def _find_taxbill_link_in_soup(soup):
-    keywords = ["사용자확인", "바로가기", "세금계산서확인", "확인하기"]
-    for tag in soup.find_all(["a", "button"]):
-        text = tag.get_text(strip=True)
-        href = tag.get("href", "")
-        onclick = tag.get("onclick", "")
-        if any(k in text for k in keywords):
-            if href and href.startswith("http"):
-                return href
-            m = re.search(r"https?://[^\s'\"]+", onclick)
-            if m:
-                return m.group()
-    for tag in soup.find_all("a", href=True):
-        href = tag["href"]
-        if "taxbill" in href.lower() or "etax" in href.lower():
-            return href
-    return None
-
-
-def _parse_taxbill_page(driver, taxbill_url):
+def _parse_from_mail_body(html_text):
     result = {
-        "supplier_name": "", "supplier_biz_no": "",
-        "issue_date": "", "supply_amount": 0,
-        "tax_amount": 0, "total_amount": 0,
-        "item_name": "", "pdf_path": "",
+        "supplier_biz_no": "", "supplier_name": "", "issue_date": "",
+        "supply_amount": 0,    "tax_amount": 0,    "total_amount": 0,
+        "item_name": "",       "taxbill_links": [],
+    }
+    if not html_text:
+        return result
+    soup = BeautifulSoup(html_text, "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if any(d in href for d in TAXBILL_DOMAINS):
+            result["taxbill_links"].append(href)
+        elif re.search(r"taxbill|tax_bill|etax|계산서|bill", href, re.I):
+            result["taxbill_links"].append(href)
+    result["taxbill_links"] = list(dict.fromkeys(result["taxbill_links"]))
+    text = soup.get_text(separator="\n")
+    buyer_biz = (get_setting("buyer_biz_no") or "").replace("-", "").replace(" ", "")
+    biz_nos = re.findall(r"\d{3}-\d{2}-\d{5}", text)
+    for bno in biz_nos:
+        cleaned = bno.replace("-", "")
+        if cleaned != buyer_biz:
+            result["supplier_biz_no"] = cleaned
+            break
+    if not result["supplier_biz_no"] and biz_nos:
+        result["supplier_biz_no"] = biz_nos[0].replace("-", "")
+    def find_amount(labels):
+        for lbl in labels:
+            m = re.search(lbl + r"[^\d]{0,15}([1-9][\d,]{2,})", text)
+            if m:
+                v = int(m.group(1).replace(",", ""))
+                if v > 0:
+                    return v
+        return 0
+    result["total_amount"]  = find_amount(["합계금액","청구금액","합 계","합계","총금액","total"])
+    result["supply_amount"] = find_amount(["공급가액","공급금액"])
+    result["tax_amount"]    = find_amount(["세액","부가세","vat"])
+    if not result["total_amount"] and result["supply_amount"]:
+        result["total_amount"] = result["supply_amount"] + result["tax_amount"]
+    if not result["supply_amount"] and result["total_amount"] and result["tax_amount"]:
+        result["supply_amount"] = result["total_amount"] - result["tax_amount"]
+    m = re.search(r"(\d{4})[\-./년]\s*(\d{1,2})[\-./월]\s*(\d{1,2})", text)
+    if m:
+        result["issue_date"] = f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
+    for pattern in [r"공급자[\s\S]{0,10}상호[^가-힣\w]{0,5}([가-힣\w]{2,20})",
+                    r"상호\s*[:\uff1a]?\s*([가-힣\w]{2,20})",
+                    r"회사명\s*[:\uff1a]?\s*([가-힣\w]{2,20})"]:
+        m = re.search(pattern, text)
+        if m:
+            result["supplier_name"] = m.group(1).strip()
+            break
+    for pattern in [r"품목\s*[:\uff1a]?\s*([가-힣\w\s]{2,30})",
+                    r"품명\s*[:\uff1a]?\s*([가-힣\w\s]{2,30})"]:
+        m = re.search(pattern, text)
+        if m:
+            result["item_name"] = m.group(1).strip()[:30]
+            break
+    return result
+
+def _is_taxbill_link(url):
+    if any(d in url for d in TAXBILL_DOMAINS):
+        return True
+    return bool(re.search(r"taxbill|tax_bill|etax|계산서", url, re.I))
+
+def _parse_taxbill_page_generic(driver, taxbill_url, buyer_biz=""):
+    import datetime
+    result = {
+        "supplier_biz_no": "", "supplier_name": "", "issue_date": "",
+        "supply_amount": 0, "tax_amount": 0, "total_amount": 0,
+        "item_name": "", "pdf_path": "", "error": "",
     }
     try:
-        import datetime
-        from selenium.webdriver.common.action_chains import ActionChains
-
         original_handle = driver.current_window_handle
         all_handles_before = set(driver.window_handles)
         driver.get(taxbill_url)
@@ -210,33 +230,46 @@ def _parse_taxbill_page(driver, taxbill_url):
         if new_handles:
             driver.switch_to.window(new_handles.pop())
             time.sleep(3)
-
-        buyer_biz = (get_setting("buyer_biz_no") or "").replace("-", "").replace(" ", "")
+        buyer_biz_clean = buyer_biz.replace("-", "").replace(" ", "")
         frames = driver.find_elements(By.TAG_NAME, "frame") + driver.find_elements(By.TAG_NAME, "iframe")
-        if frames and buyer_biz and len(buyer_biz) >= 10:
-            driver.switch_to.frame(frames[0])
-            time.sleep(1)
+        if frames and buyer_biz_clean and len(buyer_biz_clean) >= 10:
             try:
-                el1 = driver.find_element(By.NAME, "CORP_NO1")
-                el2 = driver.find_element(By.NAME, "CORP_NO2")
-                el3 = driver.find_element(By.NAME, "CORP_NO3")
-                ActionChains(driver).click(el1).send_keys(buyer_biz[0:3]).perform(); time.sleep(0.5)
-                ActionChains(driver).click(el2).send_keys(buyer_biz[3:5]).perform(); time.sleep(0.5)
-                ActionChains(driver).click(el3).send_keys(buyer_biz[5:10]).perform(); time.sleep(0.5)
+                driver.switch_to.frame(frames[0])
+                time.sleep(1)
+                try:
+                    el1 = driver.find_element(By.NAME, "CORP_NO1")
+                    el2 = driver.find_element(By.NAME, "CORP_NO2")
+                    el3 = driver.find_element(By.NAME, "CORP_NO3")
+                    ActionChains(driver).click(el1).send_keys(buyer_biz_clean[0:3]).perform(); time.sleep(0.3)
+                    ActionChains(driver).click(el2).send_keys(buyer_biz_clean[3:5]).perform(); time.sleep(0.3)
+                    ActionChains(driver).click(el3).send_keys(buyer_biz_clean[5:10]).perform(); time.sleep(0.3)
+                except Exception:
+                    pass
+                try:
+                    single = driver.find_element(By.CSS_SELECTOR,
+                        "input[name*='corp'], input[name*='biz'], input[name*='bizno'], input[id*='bizno']")
+                    single.clear()
+                    single.send_keys(buyer_biz_clean[:10])
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+                for selector in [
+                    "img[src*='btn_inq'], img[src*='confirm'], img[src*='search']",
+                    "button[type='submit'], input[type='submit']",
+                    "a[onclick*='inq'], a[onclick*='search']",
+                ]:
+                    btns = driver.find_elements(By.CSS_SELECTOR, selector)
+                    if btns:
+                        try:
+                            ActionChains(driver).move_to_element(btns[0]).click().perform()
+                            time.sleep(5)
+                            break
+                        except Exception:
+                            pass
+                driver.switch_to.default_content()
+                time.sleep(2)
             except Exception:
-                pass
-            for img in driver.find_elements(By.TAG_NAME, "img"):
-                if "btn_inq_confirm" in (img.get_attribute("src") or ""):
-                    try:
-                        ActionChains(driver).move_to_element(img).click().perform()
-                        time.sleep(6)
-                    except Exception:
-                        pass
-                    break
-            driver.switch_to.default_content()
-            time.sleep(2)
-
-        # 스크린샷
+                driver.switch_to.default_content()
         dl_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
         os.makedirs(dl_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -246,23 +279,18 @@ def _parse_taxbill_page(driver, taxbill_url):
             result["pdf_path"] = screenshot_path
         except Exception:
             pass
-
-        # 텍스트 추출
         page_text = ""
         try:
             page_text = driver.execute_script(
                 "var texts=[];"
-                "try{texts.push(document.body.innerText);}catch(e){}"
-                "for(var i=0;i<window.frames.length;i++){"
-                "  try{texts.push(window.frames[i].document.body.innerText);}catch(e){}"
-                "}"
-                "return texts.join('\n');"
+                "texts.push(document.body?document.body.innerText:'');"
+                "return texts.join('\\n');"
             ) or ""
         except Exception:
             pass
         if not page_text.strip():
-            for frm in (driver.find_elements(By.TAG_NAME, "frame") +
-                        driver.find_elements(By.TAG_NAME, "iframe")):
+            all_frames = driver.find_elements(By.TAG_NAME, "frame") + driver.find_elements(By.TAG_NAME, "iframe")
+            for frm in all_frames:
                 try:
                     driver.switch_to.frame(frm)
                     page_text += BeautifulSoup(driver.page_source, "html.parser").get_text() + "\n"
@@ -271,272 +299,211 @@ def _parse_taxbill_page(driver, taxbill_url):
                     driver.switch_to.default_content()
         if not page_text.strip():
             page_text = BeautifulSoup(driver.page_source, "html.parser").get_text()
-
-        # 줄 단위 파싱
-        lines = [l.strip() for l in page_text.splitlines()]
-        nlines = len(lines)
-
-        def next_val(keyword, search_range=10):
-            for i, l in enumerate(lines):
-                if keyword in l:
-                    for j in range(i+1, min(i+search_range, nlines)):
-                        if lines[j]:
-                            return lines[j], i
-            return "", -1
-
-        def is_amount(s):
-            return bool(re.match(r"^[1-9][\d,]+$", s))
-
-        # 1) 공급자 사업자번호
+        buyer_biz2 = buyer_biz_clean
         biz_nos = re.findall(r"\d{3}-\d{2}-\d{5}", page_text)
-        buyer_biz2 = (get_setting("buyer_biz_no") or "").replace("-", "")
         for bno in biz_nos:
             cleaned = bno.replace("-", "")
             if cleaned != buyer_biz2:
                 result["supplier_biz_no"] = cleaned
                 break
-
-        # 2) 공급자 상호명 - 첫번째 "상호(법인명)" 다음 줄
+        if not result["supplier_biz_no"] and biz_nos:
+            result["supplier_biz_no"] = biz_nos[0].replace("-", "")
+        def find_amount(labels):
+            for lbl in labels:
+                m2 = re.search(lbl + r"[^\d]{0,15}([1-9][\d,]{2,})", page_text)
+                if m2:
+                    v = int(m2.group(1).replace(",", ""))
+                    if v > 0:
+                        return v
+            return 0
+        result["total_amount"]  = find_amount(["합계금액","청구금액","합 계","합계","총금액"])
+        result["supply_amount"] = find_amount(["공급가액","공급금액"])
+        result["tax_amount"]    = find_amount(["세액","부가세"])
+        lines = [l.strip() for l in page_text.splitlines() if l.strip()]
+        nlines = len(lines)
+        def is_amount(s):
+            return bool(re.match(r"^[1-9][\d,]+$", s))
         for i, l in enumerate(lines):
-            if "상호(법인명)" in l:
+            if "상호(법인명)" in l or l == "상호":
                 for j in range(i+1, min(i+5, nlines)):
-                    if lines[j] and lines[j] not in ("성명","상호(법인명)","사업장주소"):
+                    if lines[j] and lines[j] not in ("성명","상호(법인명)","사업장주소","상호"):
                         result["supplier_name"] = lines[j]
                         break
                 if result["supplier_name"]:
                     break
-
-        # 3) 합계금액 - "합계금액" 이후 첫 번째 금액(콤마포함 숫자)
-        for i, l in enumerate(lines):
-            if l == "합계금액":
-                for j in range(i+1, min(i+15, nlines)):
-                    if is_amount(lines[j]):
-                        result["total_amount"] = int(lines[j].replace(",", ""))
+        if not result["supplier_name"]:
+            for pattern in [r"공급자[\s\S]{0,10}상호[^가-힣\w]{0,5}([가-힣\w]{2,20})",
+                            r"상호\s*[:\uff1a]?\s*([가-힣\w]{2,20})"]:
+                m = re.search(pattern, page_text)
+                if m:
+                    result["supplier_name"] = m.group(1).strip()
+                    break
+        if not result["total_amount"]:
+            for i, l in enumerate(lines):
+                if l in ("합계금액","청구금액","합계"):
+                    for j in range(i+1, min(i+15, nlines)):
+                        if is_amount(lines[j]):
+                            result["total_amount"] = int(lines[j].replace(",",""))
+                            break
+                    if result["total_amount"]:
                         break
-                break
-
-        # 4) 공급가액/세액 - "단가" 다음 줄들에서 금액 2개 연속
-        for i, l in enumerate(lines):
-            if l == "단가":
-                # 단가 이후: 단가값, 공급가액값, 세액값 순서
-                amounts = []
-                for j in range(i+1, min(i+20, nlines)):
-                    if is_amount(lines[j]):
-                        amounts.append(int(lines[j].replace(",", "")))
-                    if len(amounts) >= 5:
-                        break
-                if len(amounts) >= 2:
-                    result["supply_amount"] = amounts[-2]
-                    result["tax_amount"] = amounts[-1]
-                break
-
-        # 공급가액 fallback
+        if not result["supply_amount"]:
+            for i, l in enumerate(lines):
+                if l == "단가":
+                    amounts = [int(lines[j].replace(",","")) for j in range(i+1, min(i+20, nlines)) if is_amount(lines[j])]
+                    if len(amounts) >= 2:
+                        result["supply_amount"] = amounts[-2]
+                        result["tax_amount"]    = amounts[-1]
+                    break
+        if not result["total_amount"] and result["supply_amount"]:
+            result["total_amount"] = result["supply_amount"] + result["tax_amount"]
         if not result["supply_amount"] and result["total_amount"] and result["tax_amount"]:
             result["supply_amount"] = result["total_amount"] - result["tax_amount"]
-
-        # 5) 발행일 - "발행일자" 다음 줄
-        val, _ = next_val("발행일자", 3)
-        if re.match(r"\d{4}-\d{2}-\d{2}", val):
-            result["issue_date"] = val
-        if not result["issue_date"]:
-            m3 = re.search(r"(\d{4}-\d{2}-\d{2})", page_text)
-            if m3:
-                result["issue_date"] = m3.group(1)
-
-        # 6) 품목명 - "품목" 헤더 이후 첫 번째 비어있지 않은 비숫자 줄
+        m = re.search(r"(\d{4})[\-./년]\s*(\d{1,2})[\-./월]\s*(\d{1,2})", page_text)
+        if m:
+            result["issue_date"] = f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
         for i, l in enumerate(lines):
-            if l == "품목":
+            if l in ("품목","품명"):
                 for j in range(i+1, min(i+20, nlines)):
                     nm = lines[j]
                     if nm and not re.match(r"^[\d\s,]+$", nm) and nm not in ("규격","수량","단가","공급가액","세액","비고"):
                         result["item_name"] = nm[:30]
                         break
                 break
-
-        # 새창 닫고 복귀
+        if not result["item_name"]:
+            m = re.search(r"품목\s*[:\uff1a]?\s*([가-힣\w\s]{2,30})", page_text)
+            if m:
+                result["item_name"] = m.group(1).strip()[:30]
         try:
             if driver.current_window_handle != original_handle:
                 driver.close()
                 driver.switch_to.window(original_handle)
         except Exception:
             pass
-
     except Exception as e:
         result["error"] = str(e)
     return result
 
-def _submit_expense(driver, base_url, invoice_data, pdf_path=None):
-    auto_submit = (get_setting("auto_submit") or "false").lower() == "true"
-    company_id = get_setting("bizmeka_company") or "obase"
-    expense_url = (
-        base_url + "/myoffice/ezApproval/approval_write.aspx"
-        "?compid=" + company_id + "&doctype=expenditure"
-    )
+def run_pipeline(log_fn=None):
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+    base_url  = "https://www.bizmeka.com"
+    buyer_biz = (get_setting("buyer_biz_no") or "").replace("-", "").replace(" ", "")
+    max_count = int(get_setting("max_mail_count") or 200)
+    driver    = _make_driver(headless=True)
+    results   = []
     try:
-        driver.get(expense_url)
-        time.sleep(3)
-        title = (f"[지출결의] {invoice_data.get('supplier_name','')}"
-                 f" {invoice_data.get('issue_date','')}")
-        for sel in ["input[id*='title']", "input[name*='title']",
-                    "input[id*='subject']", "input[name*='subject']"]:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            if els:
-                els[0].clear(); els[0].send_keys(title); break
-        amount = invoice_data.get("total_amount", 0)
-        for sel in ["input[id*='amount']", "input[name*='amount']",
-                    "input[id*='money']", "input[name*='money']"]:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            if els:
-                els[0].clear(); els[0].send_keys(str(amount)); break
-        content = (
-            f"공급자: {invoice_data.get('supplier_name','')}\n"
-            f"사업자번호: {invoice_data.get('supplier_biz_no','')}\n"
-            f"공급가액: {invoice_data.get('supply_amount',0):,}원\n"
-            f"세액: {invoice_data.get('tax_amount',0):,}원\n"
-            f"합계: {invoice_data.get('total_amount',0):,}원\n"
-            f"품목: {invoice_data.get('item_name','')}"
-        )
-        for sel in ["textarea", "div[contenteditable='true']"]:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            if els:
-                try:
-                    els[0].clear(); els[0].send_keys(content)
-                except Exception:
-                    driver.execute_script(
-                        "arguments[0].innerText=arguments[1]", els[0], content)
-                break
-        if pdf_path and os.path.exists(pdf_path):
-            for el in driver.find_elements(By.CSS_SELECTOR, "input[type='file']"):
-                try:
-                    el.send_keys(os.path.abspath(pdf_path))
-                    time.sleep(2)
-                    break
-                except Exception:
-                    continue
-        if auto_submit:
-            for sel in ["input[value*='상신']", "a[onclick*='submit']",
-                        "button[id*='submit']", "button[title*='상신']"]:
-                els = driver.find_elements(By.CSS_SELECTOR, sel)
-                if els:
-                    els[0].click(); time.sleep(2)
-                    return True, "지출결의서 상신 완료"
-            return False, "상신 버튼을 찾지 못했습니다."
-        else:
-            for sel in ["input[value*='임시저장']", "a[onclick*='save']",
-                        "button[id*='save']", "button[title*='임시저장']"]:
-                els = driver.find_elements(By.CSS_SELECTOR, sel)
-                if els:
-                    els[0].click(); time.sleep(2)
-                    return True, "지출결의서 임시저장 완료"
-            return True, "지출결의서 작성 완료 (수동 저장 필요)"
-    except Exception as e:
-        return False, f"지출결의서 오류: {e}"
-
-
-def run_full_pipeline():
-    result = {
-        "new": 0, "matched": 0, "submitted": 0,
-        "skipped": 0, "error": 0, "error_msg": ""
-    }
-    base_url = "https://ngwx.ktbizoffice.com"
-    driver = None
-    try:
-        driver = _make_driver(headless=True)
+        log("그룹웨어 로그인 중...")
         _selenium_login(driver, base_url)
-        keyword = get_setting("mail_keyword") or "세금계산서"
-        mails = _get_mail_list_js(driver, base_url, keyword=keyword, max_count=200)
-        if not mails:
-            result["error_msg"] = "세금계산서 메일 없음 (키워드: " + keyword + ")"
-            return result
+        log("로그인 완료")
+        log("메일 목록 조회 중...")
+        mails = _get_mail_list_js(driver, base_url, keyword="", max_count=max_count)
+        log(f"메일 {len(mails)}건 조회됨")
+        vendors = get_vendors()
         existing = get_invoices()
-        done_subjects = {inv["mail_subject"] for inv in existing}
+        existing_keys = set()
+        for inv in existing:
+            existing_keys.add((inv.get("supplier_biz_no",""), inv.get("issue_date","")))
         for mail in mails:
             subject = mail.get("subject", "")
-            date = mail.get("date", "")[:10]
-            sender = mail.get("sender", "")
-            mail_id = mail.get("id", "")
-            if not mail_id or subject in done_subjects:
-                result["skipped"] += 1
+            href    = mail.get("href", "")
+            date    = mail.get("date", "")
+            log(f"메일 처리: {subject}")
+            html_body = _get_mail_body_html(driver, base_url, href)
+            mail_data = _parse_from_mail_body(html_body)
+            taxbill_links = mail_data.get("taxbill_links", [])
+            if not taxbill_links:
+                log("  → 세금계산서 링크 없음, 스킵")
+                continue
+            log(f"  → 링크 {len(taxbill_links)}개: {taxbill_links[0][:60]}")
+            page_data = _parse_taxbill_page_generic(driver, taxbill_links[0], buyer_biz)
+            def merge(key):
+                v = page_data.get(key)
+                return v if v else mail_data.get(key, "" if isinstance(mail_data.get(key,""), str) else 0)
+            invoice_data = {
+                "supplier_biz_no": merge("supplier_biz_no"),
+                "supplier_name":   merge("supplier_name"),
+                "issue_date":      merge("issue_date") or date[:10],
+                "supply_amount":   merge("supply_amount"),
+                "tax_amount":      merge("tax_amount"),
+                "total_amount":    merge("total_amount"),
+                "item_name":       merge("item_name"),
+                "pdf_path":        page_data.get("pdf_path",""),
+                "mail_subject":    subject,
+            }
+            if page_data.get("error"):
+                log(f"  → 파싱 오류: {page_data['error']}")
+            key = (invoice_data["supplier_biz_no"], invoice_data["issue_date"])
+            if key in existing_keys and key != ("",""):
+                log(f"  → 중복 스킵")
                 continue
             vendor = None
-            biz_no = ""
-            clean_sub = subject.replace("(주)", "").replace(" ", "")
-            for v in get_vendors():
-                clean_nm = v["name"].replace("(주)", "").replace(" ", "")
-                if clean_nm and clean_nm in clean_sub:
-                    vendor = v
-                    biz_no = v["biz_number"]
-                    break
-            if not vendor and sender:
-                vendor = find_vendor_by_name(sender)
-            status = "MATCHED" if vendor else "PENDING"
-            memo = (f"매입처 매칭: {vendor['name']}" if vendor
-                    else "매입처 미등록 – 확인 필요")
-            invoice_data = {
-                "mail_subject": subject,
-                "mail_date": date,
-                "issue_date": date,
-                "supplier_name": vendor["name"] if vendor else sender,
-                "supplier_biz_no": biz_no,
-                "supply_amount": 0,
-                "tax_amount": 0,
-                "total_amount": 0,
-                "item_name": "",
-                "status": status,
-                "result_memo": memo,
-            }
-            if vendor:
-                mail_url = _get_mail_body_url(base_url, mail_id)
-                taxbill_url = _extract_taxbill_link(driver, mail_url)
-                if taxbill_url:
-                    tb = _parse_taxbill_page(driver, taxbill_url)
-                    invoice_data.update({
-                        "issue_date": tb.get("issue_date") or date,
-                        "supplier_name": tb.get("supplier_name") or invoice_data["supplier_name"],
-                        "supplier_biz_no": tb.get("supplier_biz_no") or biz_no,
-                        "supply_amount": tb.get("supply_amount", 0),
-                        "tax_amount": tb.get("tax_amount", 0),
-                        "total_amount": tb.get("total_amount", 0),
-                        "item_name": tb.get("item_name", ""),
-                    })
-                    pdf_path = tb.get("pdf_path", "")
-                    ok, msg = _submit_expense(driver, base_url, invoice_data, pdf_path)
-                    if ok:
-                        result["submitted"] += 1
-                        invoice_data["status"] = "SUBMITTED"
-                        invoice_data["result_memo"] = msg
-                    else:
-                        invoice_data["result_memo"] = msg
-            add_invoice(invoice_data)
-            result["new"] += 1
-            if vendor:
-                result["matched"] += 1
-            done_subjects.add(subject)
+            if invoice_data["supplier_biz_no"]:
+                for v in vendors:
+                    if v.get("biz_no","").replace("-","") == invoice_data["supplier_biz_no"]:
+                        vendor = v
+                        break
+            if not vendor and invoice_data["supplier_name"]:
+                vendor = find_vendor_by_name(invoice_data["supplier_name"])
+            if not vendor:
+                log(f"  → 매입처 미등록: {invoice_data.get('supplier_name','')} ({invoice_data.get('supplier_biz_no','')})")
+                continue
+            log(f"  → 매입처 매칭: {vendor.get('name','')}")
+            invoice_data["vendor_id"] = vendor.get("id","")
+            inv_id = add_invoice(invoice_data)
+            existing_keys.add(key)
+            log(f"  → DB 저장 완료 (id={inv_id})")
+            submitted = _submit_expense(driver, base_url, invoice_data, invoice_data.get("pdf_path"))
+            status = "submitted" if submitted else "pending"
+            update_invoice_status(inv_id, status)
+            log(f"  → 지출결의서 {'제출' if submitted else '대기'} (id={inv_id})")
+            results.append({**invoice_data, "id": inv_id, "status": status})
     except Exception as e:
-        result["error"] += 1
-        result["error_msg"] = str(e)
+        log(f"파이프라인 오류: {e}")
     finally:
-        if driver:
+        try:
             driver.quit()
-    return result
+        except Exception:
+            pass
+    return results
 
-
-def retry_invoice(invoice_id):
-    invoices = get_invoices()
-    target = next((i for i in invoices if i["id"] == invoice_id), None)
-    if not target:
-        return False, "이력을 찾을 수 없습니다."
-    base_url = "https://ngwx.ktbizoffice.com"
-    driver = None
-    try:
-        driver = _make_driver(headless=True)
-        _selenium_login(driver, base_url)
-        ok, msg = _submit_expense(driver, base_url, dict(target))
-        if ok:
-            update_invoice_status(invoice_id, "SUBMITTED", msg)
-        return ok, msg
-    except Exception as e:
-        return False, str(e)
-    finally:
-        if driver:
-            driver.quit()
+def _submit_expense(driver, base_url, invoice_data, pdf_path=None):
+    auto_submit = (get_setting("auto_submit") or "false").lower() == "true"
+    company_id  = get_setting("bizmeka_company") or "obase"
+    approver    = get_setting("approver_id") or ""
+    cost_center = get_setting("cost_center") or ""
+    driver.get(base_url + "/myoffice/appr/appr_write.aspx?compid=" + company_id + "&formcode=EXP001")
+    time.sleep(4)
+    def safe_fill(by, locator, value):
+        try:
+            el = driver.find_element(by, locator)
+            el.clear()
+            el.send_keys(str(value))
+        except Exception:
+            pass
+    safe_fill(By.NAME, "title",       f"[세금계산서] {invoice_data.get('supplier_name','')} {invoice_data.get('issue_date','')}")
+    safe_fill(By.NAME, "amount",      invoice_data.get("total_amount",0))
+    safe_fill(By.NAME, "supply_amt",  invoice_data.get("supply_amount",0))
+    safe_fill(By.NAME, "tax_amt",     invoice_data.get("tax_amount",0))
+    safe_fill(By.NAME, "cost_center", cost_center)
+    safe_fill(By.NAME, "remark",      f"공급자:{invoice_data.get('supplier_name','')} / 품목:{invoice_data.get('item_name','')} / 사업자:{invoice_data.get('supplier_biz_no','')}")
+    if approver:
+        safe_fill(By.NAME, "approver", approver)
+    if pdf_path and os.path.exists(pdf_path):
+        try:
+            file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
+            file_input.send_keys(os.path.abspath(pdf_path))
+            time.sleep(2)
+        except Exception:
+            pass
+    if auto_submit:
+        try:
+            submit_btn = driver.find_element(By.CSS_SELECTOR,
+                "input[type='submit'][value*='제출'], button[type='submit']")
+            submit_btn.click()
+            time.sleep(3)
+            return True
+        except Exception:
+            return False
+    return False
