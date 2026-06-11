@@ -507,3 +507,33 @@ def _submit_expense(driver, base_url, invoice_data, pdf_path=None):
         except Exception:
             return False
     return False
+
+def test_connection(target="groupware"):
+    base_url = get_setting("groupware_url") or "https://www.bizmeka.com"
+    driver = None
+    try:
+        driver = _make_driver(headless=True)
+        if target == "groupware":
+            _selenium_login(driver, base_url)
+            driver.quit()
+            return True, "그룹웨어 로그인 성공"
+        elif target == "bizmeka":
+            company_id = get_setting("bizmeka_company") or "obase"
+            driver.get(base_url + "/LoginN.aspx?compid=" + company_id)
+            time.sleep(3)
+            title = driver.title
+            driver.quit()
+            return True, f"비즈메카 접속 성공 (페이지: {title})"
+        else:
+            driver.quit()
+            return False, f"알 수 없는 target: {target}"
+    except Exception as e:
+        try:
+            if driver: driver.quit()
+        except:
+            pass
+        return False, str(e)
+
+
+def run_full_pipeline(log_fn=None):
+    return run_pipeline(log_fn=log_fn)
