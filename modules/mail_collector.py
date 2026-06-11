@@ -225,7 +225,7 @@ def _extract_taxbill_links(html):
 
     # 정규식으로 텍스트에서 URL 추출 (링크 태그 없는 경우 대비)
     if not found:
-        urls = re.findall(r'https?://[^s"'<>][]+', html)
+                        urls = re.findall("https?://[^\\s\"'<>\\]\\[]+", html)
         for url in urls:
             for domain in TAXBILL_DOMAINS:
                 if domain in url:
